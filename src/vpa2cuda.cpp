@@ -6,6 +6,7 @@ void printUsage(char*);
 
 typedef struct vpaReportRow_t{
     std::string opType, opRetType, op1, op2, opRet;
+    int line;
 } vpaReportRow;
 
 int main(int argc, char* argv[]){
@@ -18,15 +19,19 @@ int main(int argc, char* argv[]){
     std::map<std::string, int> solutionVector;
     int lengthVector;
     int i;
+    bool inlineAssignments = false;
     double error, reward, penalty;
     bool verbose = false;
-    while ((opt = getopt(argc, argv, "r:b:v")) != -1) {
+    while ((opt = getopt(argc, argv, "r:b:vl")) != -1) {
         switch (opt) {
             case 'v':
                 verbose = true;
                 break;
             case 'r':
                 reportPath = std::string(optarg);
+                break;
+            case 'l':
+                inlineAssignments = true;
                 break;
             case 'b':
                 error = atof(optarg);
@@ -85,7 +90,7 @@ int main(int argc, char* argv[]){
         OpRet.erase(OpRet.end()-1, OpRet.end());
         DEBUG << OpId << " " << line << " " << OpTy << " " << OpRetTy << " " << Op1 << " " << Op2 << " "<<OpRet << std::endl;
 
-        vpaTable[OpId] = (vpaReportRow){OpTy, OpRetTy, Op1, Op2, OpRet};
+        vpaTable[OpId] = (vpaReportRow){OpTy, OpRetTy, Op1, Op2, OpRet, atoi(line.c_str())};
     }
     
     std::map<std::string, bool> declaredVariables;
@@ -149,13 +154,14 @@ int main(int argc, char* argv[]){
     DEBUG << "/*Variables Declaration */"<< std::endl << declarations;
     
     int block = 0;
+    int currentLine = -1;
     std::string variableType;
     for(i = 0; i < lengthVector; i++){
         rowAssignment = operatorAssignment1 = operatorAssignment2 = "";
         
         auto row = *vpaTable.find(std::string("OP_"+std::to_string(i)));
         if(0 != row.second.opRet.compare("NULL")){
-            block++;
+            if(!inlineAssignments) block++;
             rowAssignment += row.second.opRet + " = ";
         } else{
             rowAssignment += row.first + " = ";
@@ -239,7 +245,13 @@ int main(int argc, char* argv[]){
             rowAssignment += operatorAssignment1 + " / " + operatorAssignment2;
         
        
-        rowAssignment += ";\n";
+        inlineAssignments ? rowAssignment += "; " : rowAssignment += ";\n";
+        
+        if(inlineAssignments && currentLine != row.second.line){
+            if(currentLine >= 0) assigment[block] += "/*line "+ std::to_string(currentLine) +" */";
+            block++;
+            currentLine = row.second.line;
+        }
 
         assigment[block] = rowAssignment + assigment[block];
         
@@ -252,7 +264,7 @@ int main(int argc, char* argv[]){
     std::cout << declarations << std::endl;
     
     for(i = 0; i < assigment.size(); i++)
-        std::cout << assigment[i];
+        inlineAssignments ? std::cout << assigment[i] << std::endl : std::cout << assigment[i];
     
     
     return EXIT_SUCCESS;
