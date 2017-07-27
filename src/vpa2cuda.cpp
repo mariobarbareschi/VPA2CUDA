@@ -235,15 +235,31 @@ int main(int argc, char* argv[]){
             }
         }
         
-        if(0 == row.second.opType.compare("ADD"))
-            rowAssignment += operatorAssignment1 + " + " + operatorAssignment2;
-        else if(0 == row.second.opType.compare("SUB"))
-            rowAssignment += operatorAssignment1 + " - " + operatorAssignment2;
-        else if(0 == row.second.opType.compare("MUL"))
-            rowAssignment += operatorAssignment1 + " * " + operatorAssignment2;
-        else
-            rowAssignment += operatorAssignment1 + " / " + operatorAssignment2;
-        
+        if(0 == row.second.opType.compare("ADD")){
+	    if(0 == variableTypes[row.first].compare("HALF")){
+            	rowAssignment += "__hadd("+operatorAssignment1 + ", " + operatorAssignment2 + ")";
+	    } else {
+            	rowAssignment += operatorAssignment1 + " + " + operatorAssignment2;
+	    }
+	} else if(0 == row.second.opType.compare("SUB")){
+	    if(0 == variableTypes[row.first].compare("HALF")){
+            	rowAssignment += "__hsub("+operatorAssignment1 + ", " + operatorAssignment2 + ")";
+	    } else {
+            	rowAssignment += operatorAssignment1 + " - " + operatorAssignment2;
+	    }
+	} else if(0 == row.second.opType.compare("MUL")){
+            if(0 == variableTypes[row.first].compare("HALF")){
+            	rowAssignment += "__hmul("+operatorAssignment1 + ", " + operatorAssignment2 + ")";
+	    } else {
+            	rowAssignment += operatorAssignment1 + " * " + operatorAssignment2;
+	    }
+	} else {
+	    if(0 == variableTypes[row.first].compare("HALF")){
+            	rowAssignment += "__hdiv("+operatorAssignment1 + ", " + operatorAssignment2 + ")";
+	    } else {
+            	rowAssignment += operatorAssignment1 + " / " + operatorAssignment2;
+	    }
+	}
        
         inlineAssignments ? rowAssignment += "; " : rowAssignment += ";\n";
         
