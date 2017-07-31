@@ -9,6 +9,9 @@ typedef struct vpaReportRow_t{
     int line;
 } vpaReportRow;
 
+void normalConversion(std::map<std::string, vpaReportRow> vpaTable, std::map<std::string, int> solutionVector, int lengthVector, bool verbose, bool inlineAssignments);
+void compactConversion(std::map<std::string, vpaReportRow> vpaTable, std::map<std::string, int> solutionVector, int lengthVector, bool verbose);
+
 int main(int argc, char* argv[]){
     
     //vpa2cuda -r report -b 3 1 2 3
@@ -20,9 +23,10 @@ int main(int argc, char* argv[]){
     int lengthVector;
     int i;
     bool inlineAssignments = false;
+    bool compact = false;
     double error, reward, penalty;
     bool verbose = false;
-    while ((opt = getopt(argc, argv, "r:b:vl")) != -1) {
+    while ((opt = getopt(argc, argv, "r:b:l:v")) != -1) {
         switch (opt) {
             case 'v':
                 verbose = true;
@@ -31,17 +35,22 @@ int main(int argc, char* argv[]){
                 reportPath = std::string(optarg);
                 break;
             case 'l':
-                inlineAssignments = true;
+                if(atoi(optarg) == 1)
+                    inlineAssignments = true;
+                else if(atoi(optarg) == 2)
+                    compact = true;
+                else if(atoi(optarg) != 0)
+                    printUsage(argv[0]);
                 break;
             case 'b':
                 error = atof(optarg);
-                DEBUG << "Solution error: " << error << std::endl;
+                DEBUG << "Input solution error: " << error << std::endl;
                 reward = atof(argv[optind]);
-                DEBUG << "Solution reward: " << reward << std::endl;
+                DEBUG << "Input solution reward: " << reward << std::endl;
                 penalty = atof(argv[optind+1]);
-                DEBUG << "Solution penalty: " << penalty << std::endl;
+                DEBUG << "Input solution penalty: " << penalty << std::endl;
                 lengthVector = atoi(argv[optind+2]);
-                DEBUG << "Solution vector length: " << lengthVector << std::endl << "Elements: ";
+                DEBUG << "Input solution vector length: " << lengthVector << std::endl << "Elements: ";
                // solutionVector = std::map<std::string, int>(lengthVector);
                 for (i = 0; i < lengthVector; i++) {
                     solutionVector[std::string("OP_"+std::to_string(i))] = (atoi(argv[optind+i+3]));
@@ -63,6 +72,7 @@ int main(int argc, char* argv[]){
     ::std::string line;
     ::std::string OpTy, OpRetTy;
     ::std::string Op1, Op2, OpRet; // Operands
+    DEBUG << "Reading the VPA report in CSV format..." << std::endl;
     while (!vpa_report.eof()) { //Retrieve a new row from the CSV until exist
         vpa_report >> getLine;
         char temp[100];
@@ -88,19 +98,29 @@ int main(int argc, char* argv[]){
         OpRet = std::string(tokenized);
         OpRet.erase(0,1);
         OpRet.erase(OpRet.end()-1, OpRet.end());
-        DEBUG << OpId << " " << line << " " << OpTy << " " << OpRetTy << " " << Op1 << " " << Op2 << " "<<OpRet << std::endl;
+        DEBUG << vpaTable.size() << " --> " << OpId << " " << line << " " << OpTy << " " << OpRetTy << " " << Op1 << " " << Op2 << " "<<OpRet << std::endl;
 
         vpaTable[OpId] = (vpaReportRow){OpTy, OpRetTy, Op1, Op2, OpRet, atoi(line.c_str())};
     }
     
+    DEBUG << "Elaborating the solution..." << std::endl;
+    
+    if(!compact)
+        normalConversion(vpaTable, solutionVector, lengthVector, verbose, inlineAssignments);
+    else
+        compactConversion(vpaTable, solutionVector, lengthVector, verbose);
+    return EXIT_SUCCESS;
+}
+
+void normalConversion(std::map<std::string, vpaReportRow> vpaTable, std::map<std::string, int> solutionVector, int lengthVector, bool verbose, bool inlineAssignments){    
     std::map<std::string, bool> declaredVariables;
     
     std::string declarations = "";
     std::map<std::string, std::string> variableTypes;
-    std::vector<std::string> assigment(lengthVector);
+    std::vector<std::string> assignment(lengthVector);
     std::string rowAssignment, operatorAssignment1, operatorAssignment2;
+    int i;
     for(i = 0; i < lengthVector; i++){
-        //rowAssignment = "";
         auto row = *vpaTable.find(std::string("OP_"+std::to_string(i)));
         if(0 != row.second.opRet.compare("NULL")){
             if(declaredVariables.find(row.second.opRet) == declaredVariables.end()){
@@ -126,7 +146,6 @@ int main(int argc, char* argv[]){
                     }
                 }
             }
-            //rowAssignment += row.second.opRet + " = ";
         } else {
             if(0 == row.second.opRetType.compare("DOUBLE")){
                 if(0 == solutionVector[row.first]){
@@ -148,14 +167,13 @@ int main(int argc, char* argv[]){
                     variableTypes[std::string("OP_"+std::to_string(i))] = "HALF";
                 }
             }
-            //rowAssignment += row.first + " = ";
         }
     }
     DEBUG << "/*Variables Declaration */"<< std::endl << declarations;
     
     int block = 0;
     int currentLine = -1;
-    std::string variableType;
+    std::string variableTypeOp1, variableTypeOp2;
     for(i = 0; i < lengthVector; i++){
         rowAssignment = operatorAssignment1 = operatorAssignment2 = "";
         
@@ -176,27 +194,27 @@ int main(int argc, char* argv[]){
         
         //get the type
         if(vpaTable.find(row.second.op1) != vpaTable.end()){
-            variableType = variableTypes[row.second.op1];
+            variableTypeOp1 = variableTypes[row.second.op1];
         } else {
-            variableType = row.second.opRetType;
+            variableTypeOp1 = row.second.opRetType;
         }
         
         //decide the cast
-        if(0 != variableTypes[row.first].compare(variableType)){
+        if(0 != variableTypes[row.first].compare(variableTypeOp1)){
             if(0 == variableTypes[row.first].compare("DOUBLE")){
                 operatorAssignment1 = "__float2double(" + operatorAssignment1 + ")";
-                if(0 == variableType.compare("HALF")){
+                if(0 == variableTypeOp1.compare("HALF")){
                     operatorAssignment1 = "__half2float(" + operatorAssignment1 + ")";
                 }
             } else if (0 == variableTypes[row.first].compare("FLOAT")){
-                if(0 == variableType.compare("HALF")){
+                if(0 == variableTypeOp1.compare("HALF")){
                     operatorAssignment1 = "__half2float(" + operatorAssignment1 + ")";
                 } else {
                     operatorAssignment1 = "__double2float_rn(" + operatorAssignment1 + ")";
                 }
             } else {
-                if(0 == variableType.compare("FLOAT")){
-                    operatorAssignment1 = "__float2half_rn(" + operatorAssignment1 + ")";
+                if(0 == variableTypeOp1.compare("FLOAT")){
+                    operatorAssignment1 = "__float2half(" + operatorAssignment1 + ")";
                 }
             }
         }
@@ -210,84 +228,128 @@ int main(int argc, char* argv[]){
         
         //get the type
         if(vpaTable.find(row.second.op2) != vpaTable.end()){
-            variableType = variableTypes[row.second.op2];
+            variableTypeOp2 = variableTypes[row.second.op2];
         } else {
-            variableType = row.second.opRetType;
+            variableTypeOp2 = row.second.opRetType;
         }
         
         //decide the cast
-        if(0 != variableTypes[row.first].compare(variableType)){
+        if(0 != variableTypes[row.first].compare(variableTypeOp2)){
             if(0 == variableTypes[row.first].compare("DOUBLE")){
                 operatorAssignment2 = "__float2double(" + operatorAssignment2 + ")";
-                if(0 == variableType.compare("HALF")){
+                if(0 == variableTypeOp2.compare("HALF")){
                     operatorAssignment2 = "__half2float(" + operatorAssignment2 + ")";
                 }
             } else if (0 == variableTypes[row.first].compare("FLOAT")){
-                if(0 == variableType.compare("HALF")){
+                if(0 == variableTypeOp2.compare("HALF")){
                     operatorAssignment2 = "__half2float(" + operatorAssignment2 + ")";
                 } else {
                     operatorAssignment2 = "__double2float_rn(" + operatorAssignment2 + ")";
                 }
             } else {
-                if(0 == variableType.compare("FLOAT")){
-                    operatorAssignment2 = "__float2half_rn(" + operatorAssignment2 + ")";
+                if(0 == variableTypeOp2.compare("FLOAT")){
+                    operatorAssignment2 = "__float2half(" + operatorAssignment2 + ")";
                 }
             }
         }
         
         if(0 == row.second.opType.compare("ADD")){
-	    if(0 == variableTypes[row.first].compare("HALF")){
+	       if(0 == variableTypes[row.first].compare("HALF")){
             	rowAssignment += "__hadd("+operatorAssignment1 + ", " + operatorAssignment2 + ")";
-	    } else {
+	       } else {
             	rowAssignment += operatorAssignment1 + " + " + operatorAssignment2;
-	    }
-	} else if(0 == row.second.opType.compare("SUB")){
-	    if(0 == variableTypes[row.first].compare("HALF")){
+	       }
+	    } else if(0 == row.second.opType.compare("SUB")){
+	       if(0 == variableTypes[row.first].compare("HALF")){
             	rowAssignment += "__hsub("+operatorAssignment1 + ", " + operatorAssignment2 + ")";
-	    } else {
+	       } else {
             	rowAssignment += operatorAssignment1 + " - " + operatorAssignment2;
-	    }
-	} else if(0 == row.second.opType.compare("MUL")){
+	       }
+	    } else if(0 == row.second.opType.compare("MUL")){
             if(0 == variableTypes[row.first].compare("HALF")){
             	rowAssignment += "__hmul("+operatorAssignment1 + ", " + operatorAssignment2 + ")";
-	    } else {
+	       } else {
             	rowAssignment += operatorAssignment1 + " * " + operatorAssignment2;
-	    }
-	} else {
-	    if(0 == variableTypes[row.first].compare("HALF")){
-            	rowAssignment += "__hdiv("+operatorAssignment1 + ", " + operatorAssignment2 + ")";
-	    } else {
+	       }
+	   } else {
+	       if(0 == variableTypes[row.first].compare("HALF")){
+             	rowAssignment += "hdiv("+operatorAssignment1 + ", " + operatorAssignment2 + ")";
+	       } else {
             	rowAssignment += operatorAssignment1 + " / " + operatorAssignment2;
-	    }
-	}
+	       }
+	   }
        
         inlineAssignments ? rowAssignment += "; " : rowAssignment += ";\n";
         
         if(inlineAssignments && currentLine != row.second.line){
-            if(currentLine >= 0) assigment[block] += "/*line "+ std::to_string(currentLine) +" */";
+            if(currentLine >= 0) assignment[block] += "/*line "+ std::to_string(currentLine) +" */";
             block++;
             currentLine = row.second.line;
         }
 
-        assigment[block] = rowAssignment + assigment[block];
+        assignment[block] = rowAssignment + assignment[block];
         
     }
     
     DEBUG << "/*Assignment */"<< std::endl;
-    for(i = 0; i < assigment.size(); i++)
-        DEBUG << assigment[i];
+    for(i = 0; i < assignment.size(); i++)
+        DEBUG << assignment[i];
     
     std::cout << declarations << std::endl;
     
-    for(i = 0; i < assigment.size(); i++)
-        inlineAssignments ? std::cout << assigment[i] << std::endl : std::cout << assigment[i];
+    for(i = 0; i < assignment.size(); i++)
+        inlineAssignments ? std::cout << assignment[i] << std::endl : std::cout << assignment[i];
     
+}
+
+void compactConversion(std::map<std::string, vpaReportRow> vpaTable, std::map<std::string, int> solutionVector, int lengthVector, bool verbose){
+    std::map<std::string, bool> declaredVariables;
     
-    return EXIT_SUCCESS;
+    std::map<std::string, std::string> variableTypes;
+    int i;
+    for(i = 0; i < lengthVector; i++){
+        auto row = *vpaTable.find(std::string("OP_"+std::to_string(i)));
+        if(0 != row.second.opRet.compare("NULL")){
+            if(declaredVariables.find(row.second.opRet) == declaredVariables.end()){
+                declaredVariables[row.second.opRet] = true;
+                if(0 == row.second.opRetType.compare("DOUBLE")){
+                    if(0 == solutionVector[row.first]){
+                        variableTypes[std::string("OP_"+std::to_string(i))] = "DOUBLE";
+                    }else if(solutionVector[row.first] == 1){
+                        variableTypes[std::string("OP_"+std::to_string(i))] = "FLOAT";
+                    }else{
+                        variableTypes[std::string("OP_"+std::to_string(i))] = "HALF";
+                    }
+                } else {
+                    if(0 == solutionVector[row.first]){
+                        variableTypes[std::string("OP_"+std::to_string(i))] = "FLOAT";
+                    }else{
+                        variableTypes[std::string("OP_"+std::to_string(i))] = "HALF";
+                    }
+                }
+            }
+        } else {
+            if(0 == row.second.opRetType.compare("DOUBLE")){
+                if(0 == solutionVector[row.first]){
+                    variableTypes[std::string("OP_"+std::to_string(i))] = "DOUBLE";
+                }else if(solutionVector[row.first] == 1){
+                    variableTypes[std::string("OP_"+std::to_string(i))] = "FLOAT";
+                }else{
+                    variableTypes[std::string("OP_"+std::to_string(i))] = "HALF";
+                }
+            } else {
+                if(0 == solutionVector[row.first]){
+                    variableTypes[std::string("OP_"+std::to_string(i))] = "FLOAT";
+                }else{
+                    variableTypes[std::string("OP_"+std::to_string(i))] = "HALF";
+                }
+            }
+        }
+    }
 }
 
 void printUsage(char* name){
-    std::cout << "Usage: " << name << " [-v] -r <path/to/the/report> -b <length> <solution vector>" << std::endl;
+    std::cout << "Usage: " << name << " [-v] -l<0|1|2> -r <path/to/the/report> -b <length> <solution vector>" << std::endl;
     std::cout.flush();
     exit(EXIT_FAILURE);
 }
